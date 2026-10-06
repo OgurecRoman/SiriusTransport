@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+frontend/node_modules/
+frontend/dist/
+
+uploads/
+
+# Local telemetry samples are large and remain available in the workspace.
+hakathon/*.jsonseq
+hakathon/*.csv
+
+.env
+.env.*
+!.env.example
