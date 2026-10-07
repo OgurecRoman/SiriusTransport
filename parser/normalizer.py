@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
 _INTEGER = re.compile(r"^[+-]?\d+$")
 _NUMBER = re.compile(r"^[+-]?(?:\d+\.\d*|\d*\.\d+|\d+)(?:[eE][+-]?\d+)?$")
 _TIMESTAMP_KEYS = {"timestamp", "timestamp_local"}
+_DATE_FORMATS = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S.%f")
 
 
 def _normalize_value(value: Any) -> Any:
@@ -41,7 +42,15 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     for key in _TIMESTAMP_KEYS:
         value = normalized.get(key)
         if isinstance(value, str):
-            normalized[key] = datetime.fromisoformat(value)
+            try:
+                normalized[key] = datetime.fromisoformat(value)
+            except ValueError:
+                for date_format in _DATE_FORMATS:
+                    try:
+                        normalized[key] = datetime.strptime(value, date_format).replace(tzinfo=timezone(timedelta(hours=3)))
+                        break
+                    except ValueError:
+                        continue
     return normalized
 
 

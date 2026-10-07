@@ -10,6 +10,7 @@ from typing import Any
 
 from .normalizer import decode_and_normalize
 from .tokenizer import IncompleteJSONError, iter_json_objects
+from .csv_loader import parse_csv_file
 
 
 @dataclass
@@ -19,6 +20,9 @@ class ParseResult:
 
 
 def parse_file(path: str | Path) -> ParseResult:
+    if Path(path).suffix.lower() == ".csv":
+        readings, parse_errors = parse_csv_file(path)
+        return ParseResult(readings=readings, parse_errors=parse_errors)
     result = ParseResult()
     previous_timestamp: datetime | None = None
     with Path(path).open("r", encoding="utf-8") as stream:

@@ -1,0 +1,18 @@
+# Python caches and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frontend dependencies and generated build output
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Runtime data
+telemetry.db
+uploads/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example

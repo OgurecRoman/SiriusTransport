@@ -1,0 +1,12 @@
+.git
+.gitignore
+frontend/node_modules
+frontend/dist
+frontend/.vite
+__pycache__
+*.py[cod]
+*.tsbuildinfo
+telemetry.db
+uploads
+hakathon
+tests

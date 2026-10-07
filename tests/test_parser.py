@@ -34,6 +34,23 @@ class NormalizerTests(unittest.TestCase):
 
 
 class LoaderTests(unittest.TestCase):
+    def test_semicolon_csv_is_normalized_to_telemetry_fields(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, encoding="utf-8", newline="") as fixture:
+            path = fixture.name
+            fixture.write("date;geo;locConverged;speed;brakeMech;route\n")
+            fixture.write("10/01/2026 11:13:38;59.926138,30.428257;1;12.5;0;7.2\n")
+        try:
+            result = parse_file(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(result.readings), 1)
+        record = result.readings[0]
+        self.assertEqual(record["latitude"], 59.926138)
+        self.assertEqual(record["longitude"], 30.428257)
+        self.assertIs(record["is_loc_converged"], True)
+        self.assertEqual(record["timestamp"].date().isoformat(), "2026-01-10")
+        self.assertIsNotNone(record["timestamp"].tzinfo)
+
     def test_duplicate_timestamps_and_truncated_tail(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonseq", delete=False, encoding="utf-8") as fixture:
             path = fixture.name
