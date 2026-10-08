@@ -41,6 +41,7 @@ type SeverityCounts = { info: number; warning: number; critical: number };
 type User = { id: string; email: string; name: string };
 
 const API = import.meta.env.VITE_API_URL ?? "/api";
+const EVENT_PAGE_SIZE = 200;
 
 function formatTime(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -202,11 +203,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (selectedProject) {
-      setSelectedDay("");
-    } else if (selectedFile) {
-      setSelectedDay(selectedFile.days[0] ?? "");
-    }
+    setSelectedDay("");
+    setSelectedEvent(null);
   }, [selectedFile, selectedProject]);
 
   useEffect(() => {
@@ -219,39 +217,60 @@ function App() {
       const countsUrl = selectedProject
         ? `${API}/projects/${selectedProject.id}/stats${query}`
         : `${API}/files/${selectedFile?.id}/severity-counts${query}`;
-      const [eventsResponse, countsResponse] = await Promise.all([
-        fetch(eventsUrl),
-        fetch(countsUrl),
-      ]);
-      if (eventsResponse.ok) setEvents((await eventsResponse.json()) as TelemetryEvent[]);
-      if (countsResponse.ok) {
+      try {
+        const [eventsResponse, countsResponse] = await Promise.all([
+          fetch(eventsUrl),
+          fetch(countsUrl),
+        ]);
+        if (!eventsResponse.ok || !countsResponse.ok) throw new Error("Не удалось загрузить события");
+        setEvents((await eventsResponse.json()) as TelemetryEvent[]);
         const countsPayload = await countsResponse.json() as SeverityCounts | ProjectStats;
-        setSeverityCounts("severity_counts" in countsPayload ? countsPayload.severity_counts : countsPayload);
+        if ("severity_counts" in countsPayload) {
+          setProjectStats(countsPayload);
+          setSeverityCounts(countsPayload.severity_counts);
+        } else {
+          setSeverityCounts(countsPayload);
+        }
+        setError(null);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Не удалось загрузить события");
       }
     };
     void loadEvents();
   }, [selectedFile, selectedProject, selectedDay]);
 
-  useEffect(() => {
-    if (!selectedProject) return;
-    const query = selectedDay ? `?day=${encodeURIComponent(selectedDay)}` : "";
-    void fetch(`${API}/projects/${selectedProject.id}/stats${query}`).then(async (response) => {
-      if (response.ok) setProjectStats((await response.json()) as ProjectStats);
-    });
-  }, [selectedProject, selectedDay, files]);
-
-  const visibleEvents = useMemo(() => events.filter((event) => {
+  const filteredEvents = useMemo(() => events.filter((event) => {
     const matchesSeverity = severity === "all" || event.severity === severity;
     const haystack = `${event.type} ${event.explanation}`.toLowerCase();
     return matchesSeverity && haystack.includes(search.toLowerCase());
   }), [events, search, severity]);
+  const [eventLimit, setEventLimit] = useState(EVENT_PAGE_SIZE);
+  const visibleEvents = filteredEvents.slice(0, eventLimit);
 
   const upload = async (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    const response = await fetch(`${API}/files`, { method: "POST", body: form });
-    if (!response.ok) throw new Error("Не удалось загрузить файл");
-    await loadFiles();
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch(`${API}/files`, { method: "POST", body: form });
+      if (!response.ok) throw new Error(`Загрузка не удалась (HTTP ${response.status})`);
+      const uploaded = await response.json() as FileSummary;
+      await loadFiles();
+      for (let attempt = 0; attempt < 600; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        const statusResponse = await fetch(`${API}/files/${uploaded.id}`);
+        if (!statusResponse.ok) break;
+        const current = await statusResponse.json() as FileSummary;
+        setFiles((previous) => previous.map((item) => item.id === current.id ? current : item));
+        if (current.status === "ready" || current.status === "failed") {
+          await loadFiles();
+          if (current.status === "failed") throw new Error("Файл загружен, но не прошёл разбор");
+          break;
+        }
+      }
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось загрузить файл");
+    }
   };
 
   const createProject = async () => {
@@ -262,7 +281,13 @@ function App() {
 
   const addFileToProject = async () => {
     if (!selectedProject || !selectedFile) return;
-    await fetch(`${API}/projects/${selectedProject.id}/files/${selectedFile.id}`, { method: "POST" });
+    const response = await fetch(`${API}/projects/${selectedProject.id}/files/${selectedFile.id}`, { method: "POST" });
+    if (!response.ok) {
+      setError("Не удалось добавить рейс в проект");
+      return;
+    }
+    const updatedProject = await response.json() as ProjectSummary;
+    setSelectedProject(updatedProject);
     await loadProjects();
   };
 
@@ -293,7 +318,7 @@ function App() {
           {files.filter((file) => !selectedProject || selectedProject.file_ids.includes(file.id)).map((file) => <button className={`file-item ${selectedFile?.id === file.id ? "active" : ""}`} key={file.id} onClick={() => setSelectedFile(file)}><span className={`status-dot ${file.status}`} /><span className="file-copy"><strong>{file.name}</strong><small>{file.format.toUpperCase()} · {file.events_count} событий</small></span></button>)}
           {files.length === 0 && <div className="empty-side">Загрузите поток, и мы покажем, чем жил этот рейс.</div>}
         </div>
-        <label className="upload-button"><FileUp size={16} /> Добавить рейс<input type="file" accept=".jsonseq,.json,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file); }} /></label>
+        <label className="upload-button"><FileUp size={16} /> Добавить рейс<input type="file" accept=".jsonseq,.json,.csv" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /></label>
         <div className="account-box">{user ? <><span><strong>{user.name}</strong><small>{user.email}</small></span><button title="Выйти" onClick={logout}><LogOut size={15} /></button></> : <><button className="account-button" onClick={() => setAuthOpen((value) => !value)}><LogIn size={15} /> Войти</button>{authOpen && <div className="auth-form"><div className="auth-tabs"><button className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}><LogIn size={13} />Вход</button><button className={authMode === "register" ? "active" : ""} onClick={() => setAuthMode("register")}><UserPlus size={13} />Регистрация</button></div>{authMode === "register" && <input placeholder="Имя" value={authName} onChange={(event) => setAuthName(event.target.value)} />}<input placeholder="Email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input placeholder="Пароль" type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><button className="auth-submit" onClick={() => void submitAuth()}>{authMode === "login" ? "Войти" : "Создать аккаунт"}</button></div>}</>}</div>
         <div className="side-footer"><Radio size={14} /> локальный режим · API</div>
       </aside>
@@ -310,7 +335,7 @@ function App() {
         </div>
         <div className="content-grid">
           <section className="panel event-panel"><div className="panel-head"><div><p className="eyebrow">События за {selectedDay ? formatDay(selectedDay) : "все дни"}</p><h2>Что происходило в пути</h2></div><div className="event-tools"><select aria-label="День телеметрии" value={selectedDay} onChange={(event) => setSelectedDay(event.target.value)}><option value="">Все дни</option>{availableDays.map((day) => <option value={day} key={day}>{formatDay(day)}</option>)}</select><div className="search"><Search size={15} /><input placeholder="Найти момент" value={search} onChange={(event) => setSearch(event.target.value)} /></div><select value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="all">Все уровни</option><option value="critical">Критично</option><option value="warning">Предупреждения</option><option value="info">Информация</option></select></div></div>
-            <div className="event-list">{visibleEvents.map((event, index) => <button className={`event-row ${selectedEvent === event ? "selected" : ""}`} key={`${event.type}-${index}`} onClick={() => setSelectedEvent(event)}><span className={`severity ${event.severity}`} /><span className="event-time">{formatTime(event.ts_start)}</span><span className="event-details"><strong>{eventLabel(event.type)}</strong><small>{event.explanation}</small></span><ArrowUpRight size={15} className="arrow" aria-hidden="true" /></button>)}{visibleEvents.length === 0 && <div className="empty-state"><Activity size={28} /><strong>Событий пока нет</strong><span>Выберите обработанный файл или измените фильтр.</span></div>}</div>
+            <div className="event-list">{visibleEvents.map((event, index) => <button className={`event-row ${selectedEvent === event ? "selected" : ""}`} key={`${event.type}-${index}`} onClick={() => setSelectedEvent(event)}><span className={`severity ${event.severity}`} /><span className="event-time">{formatTime(event.ts_start)}</span><span className="event-details"><strong>{eventLabel(event.type)}</strong><small>{event.explanation}</small></span><ArrowUpRight size={15} className="arrow" aria-hidden="true" /></button>)}{visibleEvents.length === 0 && <div className="empty-state"><Activity size={28} /><strong>Событий пока нет</strong><span>Выберите обработанный файл или измените фильтр.</span></div>}{visibleEvents.length < filteredEvents.length && <button className="load-more" onClick={() => setEventLimit((limit) => limit + EVENT_PAGE_SIZE)}>Показать ещё ({filteredEvents.length - visibleEvents.length})</button>}</div>
           </section>
           <section className="panel detail-panel"><div className="panel-head"><div><p className="eyebrow">РАЗБОР МОМЕНТА</p><h2>Почему это важно</h2></div><span className="detail-index">{selectedEvent ? formatTime(selectedEvent.ts_start) : "—"}</span></div>{selectedEvent ? <div className="detail-content"><span className={`tag ${selectedEvent.severity}`}>{severityLabel(selectedEvent.severity)}</span><h3>{eventLabel(selectedEvent.type)}</h3><p>{selectedEvent.explanation}</p><dl>{Object.entries(selectedEvent.payload_json).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl>{(selectedEvent.file_id ?? selectedFile?.id) && <MapReplay fileId={selectedEvent.file_id ?? selectedFile?.id ?? ""} event={selectedEvent} />}</div> : <div className="empty-state detail-empty"><AlertTriangle size={28} /><strong>Выберите момент</strong><span>Здесь появится его история, причина и движение вокруг него.</span></div>}</section>
         </div>
@@ -331,4 +356,3 @@ if (rootElement && rootElement.dataset.reactMounted !== "true") {
 function formatDay(day: string): string {
   return new Date(`${day}T12:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }
-

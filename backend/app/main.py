@@ -139,32 +139,44 @@ def parse_uploaded_file(file_id: UUID, path: Path) -> None:
         model = _file_or_404(db, file_id)
         model.status = "parsing"
         db.commit()
-        result = parse_file(path)
-        engine = EventEngine()
-        events = [event for reading in result.readings for event in engine.feed(reading)]
-        events.extend(engine.flush())
-        db.execute(delete(ReadingModel).where(ReadingModel.file_id == str(file_id)))
-        db.execute(delete(EventModel).where(EventModel.file_id == str(file_id)))
-        db.execute(delete(ParseErrorModel).where(ParseErrorModel.file_id == str(file_id)))
-        db.add_all(
-            ReadingModel(file_id=str(file_id), timestamp=_aware(reading.get("timestamp")), data_json=_json_safe(reading))
-            for reading in result.readings
-        )
-        db.add_all(
-            EventModel(file_id=str(file_id), type=event.type, severity=event.severity,
-                       ts_start=_aware(event.ts_start), ts_end=_aware(event.ts_end),
-                       payload_json=_json_safe(event.payload_json), explanation=event.explanation)
-            for event in events
-        )
-        db.add_all(
-            ParseErrorModel(file_id=str(file_id), record_number=error.get("record"), error=error["error"])
-            for error in result.parse_errors
-        )
-        model.status = "ready"
-        model.readings_count = len(result.readings)
-        model.events_count = len(events)
-        model.parse_errors_count = len(result.parse_errors)
-        db.commit()
+        try:
+            _persist_parse_result(db, file_id, path)
+        except Exception:
+            db.rollback()
+            model = _file_or_404(db, file_id)
+            model.status = "failed"
+            model.parse_errors_count = max(model.parse_errors_count, 1)
+            db.commit()
+
+
+def _persist_parse_result(db, file_id: UUID, path: Path) -> None:
+    model = _file_or_404(db, file_id)
+    result = parse_file(path)
+    engine = EventEngine()
+    events = [event for reading in result.readings for event in engine.feed(reading)]
+    events.extend(engine.flush())
+    db.execute(delete(ReadingModel).where(ReadingModel.file_id == str(file_id)))
+    db.execute(delete(EventModel).where(EventModel.file_id == str(file_id)))
+    db.execute(delete(ParseErrorModel).where(ParseErrorModel.file_id == str(file_id)))
+    db.add_all(
+        ReadingModel(file_id=str(file_id), timestamp=_aware(reading.get("timestamp")), data_json=_json_safe(reading))
+        for reading in result.readings
+    )
+    db.add_all(
+        EventModel(file_id=str(file_id), type=event.type, severity=event.severity,
+                   ts_start=_aware(event.ts_start), ts_end=_aware(event.ts_end),
+                   payload_json=_json_safe(event.payload_json), explanation=event.explanation)
+        for event in events
+    )
+    db.add_all(
+        ParseErrorModel(file_id=str(file_id), record_number=error.get("record"), error=error["error"])
+        for error in result.parse_errors
+    )
+    model.status = "ready"
+    model.readings_count = len(result.readings)
+    model.events_count = len(events)
+    model.parse_errors_count = len(result.parse_errors)
+    db.commit()
 
 
 app = FastAPI(title="Tram Telemetry API", version="0.2.0")
