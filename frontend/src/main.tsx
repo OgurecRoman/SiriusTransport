@@ -117,7 +117,7 @@ function MapReplay({ fileId, event }: { fileId: string; event: TelemetryEvent })
     if (!map.current) {
       map.current = L.map(mapElement.current, { zoomControl: false, attributionControl: false }).setView([points[0].latitude, points[0].longitude], 15);
       L.control.zoom({ position: "bottomright" }).addTo(map.current);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map.current);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map.current);
     }
     const resizeFrame = window.requestAnimationFrame(() => map.current?.invalidateSize());
     const line = L.polyline(points.map((point): [number, number] => [point.latitude, point.longitude]), { color: "#d9f99d", weight: 4, opacity: 0.85 }).addTo(map.current);
@@ -168,6 +168,7 @@ function App() {
   const [authPassword, setAuthPassword] = useState("");
   const [authName, setAuthName] = useState("");
   const [severity, setSeverity] = useState("all");
+  const [timeSlot, setTimeSlot] = useState("");
   const [showInfo, setShowInfo] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -252,20 +253,33 @@ function App() {
   const filteredEvents = useMemo(() => events.filter((event) => {
     const matchesSeverity = severity === "all" || event.severity === severity;
     const matchesInfoVisibility = severity === "info" || event.severity !== "info" || showInfo;
+    const eventDate = new Date(event.ts_start);
+    const matchesTimeSlot = !timeSlot || (() => {
+      const [hour, minute] = timeSlot.split(":").map(Number);
+      return eventDate.getUTCHours() === hour && Math.floor(eventDate.getUTCMinutes() / 5) === minute / 5;
+    })();
     const haystack = `${event.type} ${event.explanation}`.toLowerCase();
-    return matchesSeverity && matchesInfoVisibility && haystack.includes(search.toLowerCase());
-  }), [events, search, severity, showInfo]);
+    return matchesSeverity && matchesInfoVisibility && matchesTimeSlot && haystack.includes(search.toLowerCase());
+  }), [events, search, severity, showInfo, timeSlot]);
   const [eventLimit, setEventLimit] = useState(EVENT_PAGE_SIZE);
   const visibleEvents = filteredEvents.slice(0, eventLimit);
-  const timelineEvents = filteredEvents;
-  const timelineStart = timelineEvents[0] ? new Date(timelineEvents[0].ts_start).getTime() : 0;
-  const timelineEnd = timelineEvents[timelineEvents.length - 1] ? new Date(timelineEvents[timelineEvents.length - 1].ts_start).getTime() : 0;
-  const timelineDuration = Math.max(0, timelineEnd - timelineStart);
-  const timelineShowDate = timelineDuration >= 24 * 60 * 60 * 1000;
-  const timelineTicks = Array.from({ length: 5 }, (_, index) => {
-    const timestamp = timelineStart + (timelineDuration * index) / 4;
-    return timelineStart ? new Date(timestamp).toISOString() : "";
+  const timelineDay = selectedDay || (events[0] ? events[0].ts_start.slice(0, 10) : "");
+  const timelineStart = timelineDay ? Date.parse(`${timelineDay}T00:00:00Z`) : 0;
+  const timelineBuckets = Array.from({ length: 288 }, (_, index) => {
+    const bucketStart = timelineStart + index * 5 * 60 * 1000;
+    const bucketEnd = bucketStart + 5 * 60 * 1000;
+    const bucketEvents = events.filter((event) => {
+      const timestamp = Date.parse(event.ts_start);
+      return timestamp >= bucketStart && timestamp < bucketEnd;
+    });
+    const level = bucketEvents.some((event) => event.severity === "critical")
+      ? "critical"
+      : bucketEvents.some((event) => event.severity === "warning")
+        ? "warning"
+        : bucketEvents.length > 0 ? "info" : "empty";
+    return { index, bucketEvents, level };
   });
+  const timelineTicks = [0, 6, 12, 18, 24].map((hour) => `${String(hour).padStart(2, "0")}:00`);
 
   const upload = async (file: File) => {
     try {
@@ -355,12 +369,12 @@ function App() {
           <div className="metric"><span>Файлов</span><strong>{isProjectView ? projectStats?.files_count ?? 0 : selectedFile ? 1 : 0}</strong></div>
         </div>
         <div className="content-grid">
-          <section className="panel event-panel"><div className="panel-head"><div><p className="eyebrow">События за {selectedDay ? formatDay(selectedDay) : "все дни"}</p><h2>Что происходило в пути</h2></div><div className="event-tools"><select aria-label="День телеметрии" value={selectedDay} onChange={(event) => setSelectedDay(event.target.value)}><option value="">Все дни</option>{availableDays.map((day) => <option value={day} key={day}>{formatDay(day)}</option>)}</select><div className="search"><Search size={15} /><input placeholder="Найти момент" value={search} onChange={(event) => setSearch(event.target.value)} /></div><select value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="all">Все уровни</option><option value="critical">Критично</option><option value="warning">Предупреждения</option><option value="info">Информация</option></select><label className="info-toggle"><input type="checkbox" checked={showInfo} onChange={(event) => setShowInfo(event.target.checked)} />Показать информационные события</label></div></div>
+          <section className="panel event-panel"><div className="panel-head"><div><p className="eyebrow">События за {selectedDay ? formatDay(selectedDay) : "все дни"}</p><h2>Что происходило в пути</h2></div><div className="event-tools"><select aria-label="День телеметрии" value={selectedDay} onChange={(event) => { setSelectedDay(event.target.value); setTimeSlot(""); }}><option value="">Все дни</option>{availableDays.map((day) => <option value={day} key={day}>{formatDay(day)}</option>)}</select><select aria-label="Пятиминутный интервал" value={timeSlot} onChange={(event) => setTimeSlot(event.target.value)}><option value="">Все интервалы</option>{Array.from({ length: 288 }, (_, index) => { const hour = Math.floor(index / 12); const minute = (index % 12) * 5; const value = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`; const endHour = hour + (minute === 55 ? 1 : 0); return <option value={value} key={value}>{value}-{String(endHour).padStart(2, "0")}:{String((minute + 5) % 60).padStart(2, "0")}</option>; })}</select><div className="search"><Search size={15} /><input placeholder="Найти момент" value={search} onChange={(event) => setSearch(event.target.value)} /></div><select value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="all">Все уровни</option><option value="critical">Критично</option><option value="warning">Предупреждения</option><option value="info">Информация</option></select><label className="info-toggle"><input type="checkbox" checked={showInfo} onChange={(event) => setShowInfo(event.target.checked)} />Показать информационные события</label></div></div>
             <div className="event-list">{visibleEvents.map((event, index) => <button className={`event-row ${selectedEvent === event ? "selected" : ""}`} key={`${event.type}-${index}`} onClick={() => setSelectedEvent(event)}><span className={`severity ${event.severity}`} /><span className="event-time">{formatTime(event.ts_start)}</span><span className="event-details"><strong>{eventLabel(event.type)}</strong><small>{event.explanation}</small></span><ArrowUpRight size={15} className="arrow" aria-hidden="true" /></button>)}{visibleEvents.length === 0 && <div className="empty-state"><Activity size={28} /><strong>Событий пока нет</strong><span>Выберите обработанный файл или измените фильтр.</span></div>}{visibleEvents.length < filteredEvents.length && <button className="load-more" onClick={() => setEventLimit((limit) => limit + EVENT_PAGE_SIZE)}>Показать ещё ({filteredEvents.length - visibleEvents.length})</button>}</div>
           </section>
           <section className="panel detail-panel"><div className="panel-head"><div><p className="eyebrow">РАЗБОР МОМЕНТА</p><h2>Почему это важно</h2></div><span className="detail-index">{selectedEvent ? formatTime(selectedEvent.ts_start) : "—"}</span></div>{selectedEvent ? <div className="detail-content"><span className={`tag ${selectedEvent.severity}`}>{severityLabel(selectedEvent.severity)}</span><h3>{eventLabel(selectedEvent.type)}</h3><p>{selectedEvent.explanation}</p><dl>{Object.entries(selectedEvent.payload_json).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl>{(selectedEvent.file_id ?? selectedFile?.id) && <MapReplay fileId={selectedEvent.file_id ?? selectedFile?.id ?? ""} event={selectedEvent} />}</div> : <div className="empty-state detail-empty"><AlertTriangle size={28} /><strong>Выберите момент</strong><span>Здесь появится его история, причина и движение вокруг него.</span></div>}</section>
         </div>
-        <section className="panel timeline-panel"><div className="panel-head"><div><p className="eyebrow">СЛЕД ДНЯ</p><h2>Линия рейса</h2></div><span className="timeline-date">{timelineEvents[0] ? formatTimelineTick(timelineEvents[0].ts_start, timelineShowDate) : "нет временных данных"}</span></div><div className="timeline"><div className="timeline-line" />{timelineEvents.map((event, index) => { const eventTime = new Date(event.ts_start).getTime(); const position = timelineDuration ? ((eventTime - timelineStart) / timelineDuration) * 100 : 50; return <button key={`marker-${event.type}-${index}`} className={`marker ${event.severity}`} style={{ left: `${Math.min(100, Math.max(0, position))}%` }} title={`${formatTime(event.ts_start)} · ${eventLabel(event.type)}`} onClick={() => setSelectedEvent(event)} />; })}</div><div className="ticks">{timelineTicks.map((tick, index) => <span key={index}>{tick ? formatTimelineTick(tick, timelineShowDate) : "—"}</span>)}</div></section>
+        <section className="panel timeline-panel"><div className="panel-head"><div><p className="eyebrow">СЛЕД ДНЯ</p><h2>Линия рейса</h2></div><span className="timeline-date">{timelineDay ? formatDay(timelineDay) : "нет временных данных"}</span></div><div className="timeline">{timelineBuckets.map(({ index, bucketEvents, level }) => <button key={`bucket-${index}`} className={`timeline-segment ${level}`} title={`${timelineTicks[Math.floor(index / 72)] ?? ""} · ${bucketEvents.length} событий`} onClick={() => { const event = bucketEvents.find((item) => item.severity !== "info") ?? bucketEvents[0]; if (event) setSelectedEvent(event); }} />)}</div><div className="ticks">{timelineTicks.map((tick) => <span key={tick}>{tick}</span>)}</div></section>
       </section>
     </main>
   );
