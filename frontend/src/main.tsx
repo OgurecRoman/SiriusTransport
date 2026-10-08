@@ -115,7 +115,7 @@ function MapReplay({ fileId, event }: { fileId: string; event: TelemetryEvent })
       return;
     }
     if (!map.current) {
-      map.current = L.map(mapElement.current, { zoomControl: false }).setView([points[0].latitude, points[0].longitude], 15);
+      map.current = L.map(mapElement.current, { zoomControl: false, attributionControl: false }).setView([points[0].latitude, points[0].longitude], 15);
       L.control.zoom({ position: "bottomright" }).addTo(map.current);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map.current);
     }
