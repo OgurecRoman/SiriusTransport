@@ -44,7 +44,6 @@ const API = import.meta.env.VITE_API_URL ?? "/api";
 const EVENT_PAGE_SIZE = 200;
 
 const ADAS_VISUALS: Record<string, string> = {
-  "adas.speed_limit.activated": "/assets/adas/speed_limit.gif",
   "brake.crash.activated": "/assets/adas/emergency_brake.gif",
   "adas.traffic_light.activated": "/assets/adas/traffic_light.gif",
   "adas.danger_object.activated": "/assets/adas/danger_object.gif",
