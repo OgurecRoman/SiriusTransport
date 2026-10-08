@@ -1,50 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, AlertTriangle, ArrowUpRight, FileUp, FolderPlus, LogIn, LogOut, MapPin, Radio, RefreshCw, Search, UserPlus } from "lucide-react";
+import {
+  Activity, AlertTriangle, ArrowUpRight, FileUp, FolderPlus,
+  LogIn, LogOut, MapPin, Radio, RefreshCw, Search, UserPlus,
+  ChevronRight, LayoutDashboard, FileText, Settings, Bell
+} from "lucide-react";
 import L from "leaflet";
-import "./styles.css";
 import "leaflet/dist/leaflet.css";
+import "./styles.css";
+import { useTelemetryDashboard } from "./hooks/useTelemetryDashboard";
+import { MapReplay } from "./components/MapReplay";
 
-type FileSummary = {
-  id: string;
-  name: string;
-  status: string;
-  readings_count: number;
-  events_count: number;
-  parse_errors_count: number;
-  format: "csv" | "jsonseq";
-  days: string[];
-};
-
-type TelemetryEvent = {
-  type: string;
-  file_id?: string;
-  severity: "info" | "warning" | "critical";
-  ts_start: string;
-  ts_end: string;
-  payload_json: Record<string, unknown>;
-  explanation: string;
-};
-
-type ContextReading = {
-  timestamp?: string;
-  latitude?: number;
-  longitude?: number;
-  speed?: number;
-  fsm_state?: string;
-  [key: string]: unknown;
-};
-
-type ProjectSummary = { id: string; name: string; file_ids: string[]; created_at: string };
-type ProjectStats = { project_id: string; files_count: number; readings_count: number; events_count: number; severity_counts: SeverityCounts; days: string[] };
-type SeverityCounts = { info: number; warning: number; critical: number };
-type User = { id: string; email: string; name: string };
-
-const API = import.meta.env.VITE_API_URL ?? "/api";
-const EVENT_PAGE_SIZE = 200;
-
+// --- Utils ---
 function formatTime(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatDay(day: string): string {
+  return new Date(`${day}T12:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }
 
 const EVENT_LABELS: Record<string, string> = {
@@ -70,289 +43,410 @@ function eventLabel(type: string): string {
   return type;
 }
 
-function severityLabel(severity: TelemetryEvent["severity"]): string {
-  return { info: "Информация", warning: "Предупреждение", critical: "Критично" }[severity];
+function severityLabel(severity: string): string {
+  return { info: "Информация", warning: "Предупреждение", critical: "Критично" }[severity] || severity;
 }
 
-function MapReplay({ fileId, event }: { fileId: string; event: TelemetryEvent }) {
-  const mapElement = useRef<HTMLDivElement | null>(null);
-  const map = useRef<L.Map | null>(null);
-  const marker = useRef<L.CircleMarker | null>(null);
-  const [readings, setReadings] = useState<ContextReading[]>([]);
-  const [cursor, setCursor] = useState(0);
-  const [playing, setPlaying] = useState(false);
+// --- Components ---
 
-  useEffect(() => {
-    setPlaying(false);
-    setCursor(0);
-    const loadContext = async () => {
-      const query = new URLSearchParams({ at: event.ts_start, before: "30", after: "30" });
-      const response = await fetch(`${API}/files/${fileId}/context?${query.toString()}`);
-      if (response.ok) setReadings((await response.json()) as ContextReading[]);
-    };
-    void loadContext();
-  }, [event, fileId]);
-
-  const points = useMemo(() => readings.filter((reading): reading is ContextReading & { latitude: number; longitude: number } => (
-    typeof reading.latitude === "number" && typeof reading.longitude === "number" &&
-    Number.isFinite(reading.latitude) && Number.isFinite(reading.longitude) &&
-    reading.latitude !== 0 && reading.longitude !== 0
-  )), [readings]);
-
-  useEffect(() => {
-    if (!mapElement.current) return;
-    if (points.length === 0) {
-      map.current?.remove();
-      map.current = null;
-      marker.current = null;
-      return;
-    }
-    if (!map.current) {
-      map.current = L.map(mapElement.current, { zoomControl: false }).setView([points[0].latitude, points[0].longitude], 15);
-      L.control.zoom({ position: "bottomright" }).addTo(map.current);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map.current);
-    }
-    const resizeFrame = window.requestAnimationFrame(() => map.current?.invalidateSize());
-    const line = L.polyline(points.map((point): [number, number] => [point.latitude, point.longitude]), { color: "#d9f99d", weight: 4, opacity: 0.85 }).addTo(map.current);
-    map.current.fitBounds(line.getBounds(), { padding: [22, 22] });
-    marker.current = L.circleMarker([points[0].latitude, points[0].longitude], { radius: 8, color: "#101517", weight: 3, fillColor: "#ff836d", fillOpacity: 1 }).addTo(map.current);
-    return () => { window.cancelAnimationFrame(resizeFrame); line.remove(); marker.current?.remove(); marker.current = null; };
-  }, [points]);
-
-  useEffect(() => {
-    if (!playing || points.length < 2) return;
-    const timer = window.setInterval(() => {
-      setCursor((current) => {
-        if (current >= points.length - 1) { setPlaying(false); return current; }
-        return current + 1;
-      });
-    }, 400);
-    return () => window.clearInterval(timer);
-  }, [playing, points.length]);
-
-  useEffect(() => {
-    const point = points[cursor];
-    if (point && marker.current && map.current) {
-      marker.current.setLatLng([point.latitude, point.longitude]);
-      map.current.panTo([point.latitude, point.longitude], { animate: true, duration: 0.35 });
-    }
-  }, [cursor, points]);
-
-  return <div className="map-wrap"><div className="map-canvas" ref={mapElement} />{points.length === 0 ? <div className="map-empty"><MapPin size={20} />Нет валидных координат для этого события</div> : <div className="map-controls"><button onClick={() => setPlaying((value) => !value)}>{playing ? "Пауза" : "Воспроизвести"}</button><button onClick={() => { setPlaying(false); setCursor(0); }}>Сбросить</button><span>{points[cursor]?.speed !== undefined ? `${Number(points[cursor].speed).toFixed(1)} км/ч` : "скорость не указана"}</span></div>}</div>;
-}
-
-function App() {
-  const [files, setFiles] = useState<FileSummary[]>([]);
-  const [selectedFile, setSelectedFile] = useState<FileSummary | null>(null);
-  const [events, setEvents] = useState<TelemetryEvent[]>([]);
-  const [selectedEvent, setSelectedEvent] = useState<TelemetryEvent | null>(null);
-  const [selectedDay, setSelectedDay] = useState("");
-  const [severityCounts, setSeverityCounts] = useState<SeverityCounts>({ info: 0, warning: 0, critical: 0 });
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(null);
-  const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
-  const [projectFormOpen, setProjectFormOpen] = useState(false);
-  const [projectName, setProjectName] = useState("");
-  const [user, setUser] = useState<User | null>(null);
-  const [authOpen, setAuthOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authName, setAuthName] = useState("");
-  const [severity, setSeverity] = useState("all");
-  const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadFiles = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`${API}/files`);
-      if (!response.ok) throw new Error("API недоступен");
-      const nextFiles = (await response.json()) as FileSummary[];
-      setFiles(nextFiles);
-      if (!selectedFile && nextFiles.length > 0) setSelectedFile(nextFiles[0]);
-      setError(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Не удалось загрузить файлы");
-    } finally {
-      setLoading(false);
-    }
+function MetricCard({ label, value, variant = "default" }: { label: string; value: string | number; variant?: "default" | "warning" | "critical" }) {
+  const variantColors = {
+    default: "text-slate-900",
+    warning: "text-amber-600",
+    critical: "text-rose-600",
   };
-
-  useEffect(() => { void loadFiles(); }, []);
-
-  const loadProjects = async () => {
-    const response = await fetch(`${API}/projects`);
-    if (response.ok) {
-      const nextProjects = (await response.json()) as ProjectSummary[];
-      setProjects(nextProjects);
-      if (!selectedProject && nextProjects.length > 0) setSelectedProject(nextProjects[0]);
-    }
-  };
-
-  useEffect(() => { void loadProjects(); }, []);
-
-  useEffect(() => {
-    const token = localStorage.getItem("tram_token");
-    if (!token) return;
-    void fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
-      if (response.ok) setUser((await response.json()) as User);
-      else localStorage.removeItem("tram_token");
-    });
-  }, []);
-
-  useEffect(() => {
-    setSelectedDay("");
-    setSelectedEvent(null);
-  }, [selectedFile, selectedProject]);
-
-  useEffect(() => {
-    if (!selectedFile && !selectedProject) return;
-    const loadEvents = async () => {
-      const query = selectedDay ? `?day=${encodeURIComponent(selectedDay)}` : "";
-      const eventsUrl = selectedProject
-        ? `${API}/projects/${selectedProject.id}/events${query}`
-        : `${API}/files/${selectedFile?.id}/events${query}`;
-      const countsUrl = selectedProject
-        ? `${API}/projects/${selectedProject.id}/stats${query}`
-        : `${API}/files/${selectedFile?.id}/severity-counts${query}`;
-      try {
-        const [eventsResponse, countsResponse] = await Promise.all([
-          fetch(eventsUrl),
-          fetch(countsUrl),
-        ]);
-        if (!eventsResponse.ok || !countsResponse.ok) throw new Error("Не удалось загрузить события");
-        setEvents((await eventsResponse.json()) as TelemetryEvent[]);
-        const countsPayload = await countsResponse.json() as SeverityCounts | ProjectStats;
-        if ("severity_counts" in countsPayload) {
-          setProjectStats(countsPayload);
-          setSeverityCounts(countsPayload.severity_counts);
-        } else {
-          setSeverityCounts(countsPayload);
-        }
-        setError(null);
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Не удалось загрузить события");
-      }
-    };
-    void loadEvents();
-  }, [selectedFile, selectedProject, selectedDay]);
-
-  const filteredEvents = useMemo(() => events.filter((event) => {
-    const matchesSeverity = severity === "all" || event.severity === severity;
-    const haystack = `${event.type} ${event.explanation}`.toLowerCase();
-    return matchesSeverity && haystack.includes(search.toLowerCase());
-  }), [events, search, severity]);
-  const [eventLimit, setEventLimit] = useState(EVENT_PAGE_SIZE);
-  const visibleEvents = filteredEvents.slice(0, eventLimit);
-
-  const upload = async (file: File) => {
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const response = await fetch(`${API}/files`, { method: "POST", body: form });
-      if (!response.ok) throw new Error(`Загрузка не удалась (HTTP ${response.status})`);
-      const uploaded = await response.json() as FileSummary;
-      await loadFiles();
-      for (let attempt = 0; attempt < 600; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        const statusResponse = await fetch(`${API}/files/${uploaded.id}`);
-        if (!statusResponse.ok) break;
-        const current = await statusResponse.json() as FileSummary;
-        setFiles((previous) => previous.map((item) => item.id === current.id ? current : item));
-        if (current.status === "ready" || current.status === "failed") {
-          await loadFiles();
-          if (current.status === "failed") throw new Error("Файл загружен, но не прошёл разбор");
-          break;
-        }
-      }
-      setError(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Не удалось загрузить файл");
-    }
-  };
-
-  const createProject = async () => {
-    if (!projectName.trim()) return;
-    const response = await fetch(`${API}/projects`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: projectName.trim() }) });
-    if (response.ok) { setProjectName(""); setProjectFormOpen(false); await loadProjects(); }
-  };
-
-  const addFileToProject = async () => {
-    if (!selectedProject || !selectedFile) return;
-    const response = await fetch(`${API}/projects/${selectedProject.id}/files/${selectedFile.id}`, { method: "POST" });
-    if (!response.ok) {
-      setError("Не удалось добавить рейс в проект");
-      return;
-    }
-    const updatedProject = await response.json() as ProjectSummary;
-    setSelectedProject(updatedProject);
-    await loadProjects();
-  };
-
-  const submitAuth = async () => {
-    const endpoint = authMode === "login" ? "login" : "register";
-    const response = await fetch(`${API}/auth/${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: authEmail, password: authPassword, name: authName }) });
-    if (!response.ok) { setError(authMode === "login" ? "Не удалось войти" : "Не удалось создать аккаунт"); return; }
-    const payload = await response.json() as { token?: string; user: User };
-    if (payload.token) localStorage.setItem("tram_token", payload.token);
-    setUser(payload.user);
-    setAuthOpen(false);
-    setAuthPassword("");
-  };
-
-  const logout = () => { localStorage.removeItem("tram_token"); setUser(null); };
-  const availableDays = selectedProject ? (projectStats?.days ?? []) : (selectedFile?.days ?? []);
-  const overviewName = selectedProject?.name ?? selectedFile?.name ?? "Выберите рейс";
-  const overviewReadings = projectStats?.readings_count ?? selectedFile?.readings_count ?? "—";
-  const overviewEvents = projectStats?.events_count ?? selectedFile?.events_count ?? "—";
-
   return (
-    <main className="shell">
-      <aside className="sidebar">
-        <div className="brand"><span>Трам WAY</span></div>
-        <div className="side-heading"><span>Сохраненные рейсы</span><span className="count">{files.length}</span></div>
-        <div className="project-switcher"><label>Проект</label><div className="project-row"><select value={selectedProject?.id ?? ""} onChange={(event) => setSelectedProject(projects.find((project) => project.id === event.target.value) ?? null)}><option value="">Все файлы</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select><button title="Создать проект" onClick={() => setProjectFormOpen((value) => !value)}><FolderPlus size={15} /></button></div>{projectFormOpen && <div className="project-form"><input placeholder="Название проекта" value={projectName} onChange={(event) => setProjectName(event.target.value)} /><button onClick={() => void createProject()}>Создать</button></div>}{selectedProject && <button className="attach-button" onClick={() => void addFileToProject()}>Добавить выбранный рейс</button>}</div>
-        <div className="file-list">
-          {files.filter((file) => !selectedProject || selectedProject.file_ids.includes(file.id)).map((file) => <button className={`file-item ${selectedFile?.id === file.id ? "active" : ""}`} key={file.id} onClick={() => setSelectedFile(file)}><span className={`status-dot ${file.status}`} /><span className="file-copy"><strong>{file.name}</strong><small>{file.format.toUpperCase()} · {file.events_count} событий</small></span></button>)}
-          {files.length === 0 && <div className="empty-side">Загрузите поток, и мы покажем, чем жил этот рейс.</div>}
-        </div>
-        <label className="upload-button"><FileUp size={16} /> Добавить рейс<input type="file" accept=".jsonseq,.json,.csv" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /></label>
-        <div className="account-box">{user ? <><span><strong>{user.name}</strong><small>{user.email}</small></span><button title="Выйти" onClick={logout}><LogOut size={15} /></button></> : <><button className="account-button" onClick={() => setAuthOpen((value) => !value)}><LogIn size={15} /> Войти</button>{authOpen && <div className="auth-form"><div className="auth-tabs"><button className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}><LogIn size={13} />Вход</button><button className={authMode === "register" ? "active" : ""} onClick={() => setAuthMode("register")}><UserPlus size={13} />Регистрация</button></div>{authMode === "register" && <input placeholder="Имя" value={authName} onChange={(event) => setAuthName(event.target.value)} />}<input placeholder="Email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input placeholder="Пароль" type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><button className="auth-submit" onClick={() => void submitAuth()}>{authMode === "login" ? "Войти" : "Создать аккаунт"}</button></div>}</>}</div>
-        <div className="side-footer"><Radio size={14} /> локальный режим · API</div>
-      </aside>
-
-      <section className="workspace">
-        <header className="topbar"><div><p className="eyebrow">{selectedProject ? "Общая папка / обзор проекта" : "Обзор рейса"}</p><h1>{overviewName}</h1></div><button className="icon-button" title="Обновить" onClick={() => void loadFiles()}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></header>
-        {error && <div className="notice"><AlertTriangle size={17} /> {error}. Запустите `uvicorn backend.app.main:app --reload`.</div>}
-        <div className="metric-row">
-          <div className="metric"><span>Сигналы</span><strong>{overviewReadings}</strong></div>
-          <div className="metric"><span>Все моменты</span><strong>{overviewEvents}</strong></div>
-          <div className="metric warning-metric"><span>Предупреждения</span><strong>{severityCounts.warning}</strong></div>
-          <div className="metric critical-metric"><span>Критичные</span><strong>{severityCounts.critical}</strong></div>
-          <div className="metric"><span>Файлов</span><strong>{projectStats?.files_count ?? (selectedFile ? 1 : 0)}</strong></div>
-        </div>
-        <div className="content-grid">
-          <section className="panel event-panel"><div className="panel-head"><div><p className="eyebrow">События за {selectedDay ? formatDay(selectedDay) : "все дни"}</p><h2>Что происходило в пути</h2></div><div className="event-tools"><select aria-label="День телеметрии" value={selectedDay} onChange={(event) => setSelectedDay(event.target.value)}><option value="">Все дни</option>{availableDays.map((day) => <option value={day} key={day}>{formatDay(day)}</option>)}</select><div className="search"><Search size={15} /><input placeholder="Найти момент" value={search} onChange={(event) => setSearch(event.target.value)} /></div><select value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="all">Все уровни</option><option value="critical">Критично</option><option value="warning">Предупреждения</option><option value="info">Информация</option></select></div></div>
-            <div className="event-list">{visibleEvents.map((event, index) => <button className={`event-row ${selectedEvent === event ? "selected" : ""}`} key={`${event.type}-${index}`} onClick={() => setSelectedEvent(event)}><span className={`severity ${event.severity}`} /><span className="event-time">{formatTime(event.ts_start)}</span><span className="event-details"><strong>{eventLabel(event.type)}</strong><small>{event.explanation}</small></span><ArrowUpRight size={15} className="arrow" aria-hidden="true" /></button>)}{visibleEvents.length === 0 && <div className="empty-state"><Activity size={28} /><strong>Событий пока нет</strong><span>Выберите обработанный файл или измените фильтр.</span></div>}{visibleEvents.length < filteredEvents.length && <button className="load-more" onClick={() => setEventLimit((limit) => limit + EVENT_PAGE_SIZE)}>Показать ещё ({filteredEvents.length - visibleEvents.length})</button>}</div>
-          </section>
-          <section className="panel detail-panel"><div className="panel-head"><div><p className="eyebrow">РАЗБОР МОМЕНТА</p><h2>Почему это важно</h2></div><span className="detail-index">{selectedEvent ? formatTime(selectedEvent.ts_start) : "—"}</span></div>{selectedEvent ? <div className="detail-content"><span className={`tag ${selectedEvent.severity}`}>{severityLabel(selectedEvent.severity)}</span><h3>{eventLabel(selectedEvent.type)}</h3><p>{selectedEvent.explanation}</p><dl>{Object.entries(selectedEvent.payload_json).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl>{(selectedEvent.file_id ?? selectedFile?.id) && <MapReplay fileId={selectedEvent.file_id ?? selectedFile?.id ?? ""} event={selectedEvent} />}</div> : <div className="empty-state detail-empty"><AlertTriangle size={28} /><strong>Выберите момент</strong><span>Здесь появится его история, причина и движение вокруг него.</span></div>}</section>
-        </div>
-        <section className="panel timeline-panel"><div className="panel-head"><div><p className="eyebrow">СЛЕД ДНЯ</p><h2>Линия рейса</h2></div><span className="timeline-date">{events[0] ? new Date(events[0].ts_start).toLocaleDateString("ru-RU") : "нет временных данных"}</span></div><div className="timeline"><div className="timeline-line" />{visibleEvents.map((event, index) => <button key={`marker-${index}`} className={`marker ${event.severity}`} style={{ left: `${Math.min(96, 4 + (index / Math.max(1, visibleEvents.length - 1)) * 92)}%` }} title={eventLabel(event.type)} onClick={() => setSelectedEvent(event)} />)}</div><div className="ticks"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div></section>
-      </section>
-    </main>
+    <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between min-h-[88px] transition-all duration-200 hover:shadow-md">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
+      <strong className={`text-2xl font-bold ${variantColors[variant]}`}>{value}</strong>
+    </div>
   );
 }
 
-export default App;
+function EventRow({ event, isSelected, onClick }: { event: any; isSelected: boolean; onClick: () => void }) {
+  const severityColor = {
+    info: "bg-indigo-500",
+    warning: "bg-amber-500",
+    critical: "bg-rose-500",
+  }[event.severity] || "bg-slate-400";
+
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full grid grid-cols-[8px_80px_1fr_24px] items-center gap-4 p-4 text-left transition-all duration-200 border-b border-slate-50 ${isSelected ? "bg-indigo-50/50 ring-1 ring-inset ring-indigo-100" : "hover:bg-slate-50"}`}
+    >
+      <span className={`h-2 w-2 rounded-full shrink-0 ${severityColor}`} />
+      <span className="text-xs font-medium text-slate-500">{formatTime(event.ts_start)}</span>
+      <div className="min-w-0 flex flex-col">
+        <strong className="text-sm font-semibold text-slate-800 truncate">{eventLabel(event.type)}</strong>
+        <small className="text-xs text-slate-500 truncate">{event.explanation}</small>
+      </div>
+      <ArrowUpRight size={16} className={`text-slate-300 ${isSelected ? "text-indigo-400" : ""}`} />
+    </button>
+  );
+}
+
+function App() {
+  const state = useTelemetryDashboard();
+  const {
+    files, selectedFile, setSelectedFile,
+    events, selectedEvent, setSelectedEvent,
+    selectedDay, setSelectedDay,
+    severityCounts, projects, selectedProject, setSelectedProject,
+    projectStats, projectFormOpen, setProjectFormOpen,
+    projectName, setProjectName,
+    user, authOpen, setAuthOpen, authMode, setAuthMode,
+    authEmail, setAuthEmail, authPassword, setAuthPassword,
+    authName, setAuthName,
+    severity, setSeverity,
+    search, setSearch,
+    loading, error, filteredEvents,
+    loadFiles, upload, createProject, addFileToProject,
+    submitAuth, logout
+  } = state;
+
+  const EVENT_PAGE_SIZE = 200;
+  const visibleEvents = filteredEvents.slice(0, EVENT_PAGE_SIZE);
+
+  const overviewName = selectedProject?.name ?? selectedFile?.name ?? "Выберите рейс";
+  const overviewReadings = projectStats?.readings_count ?? selectedFile?.readings_count ?? "—";
+  const overviewEvents = projectStats?.events_count ?? selectedFile?.events_count ?? "—";
+  const availableDays = selectedProject ? (projectStats?.days ?? []) : (selectedFile?.days ?? []);
+
+  return (
+    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-72 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col transition-all duration-300">
+        <div className="p-6 flex items-center gap-3">
+          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+            <Radio size={18} />
+          </div>
+          <span className="font-bold text-lg tracking-tight text-slate-800">Трам WAY</span>
+        </div>
+
+        <div className="px-6 mb-4 flex justify-between items-center">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Сохраненные рейсы</span>
+          <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">{files.length}</span>
+        </div>
+
+        <div className="px-6 space-y-3">
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-3">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Проект</label>
+            <div className="flex gap-2">
+              <select
+                className="flex-1 text-xs p-2 rounded-lg border border-slate-200 bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                value={selectedProject?.id ?? ""}
+                onChange={(e) => setSelectedProject(projects.find(p => p.id === e.target.value) ?? null)}
+              >
+                <option value="">Все файлы</option>
+                {projects.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}
+              </select>
+              <button
+                onClick={() => setProjectFormOpen(!projectFormOpen)}
+                className="p-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:text-indigo-600 hover:border-indigo-200 transition-all"
+                title="Создать проект"
+              >
+                <FolderPlus size={16} />
+              </button>
+            </div>
+            {projectFormOpen && (
+              <div className="space-y-2 pt-2 border-t border-slate-200">
+                <input
+                  placeholder="Название проекта"
+                  className="w-full text-xs p-2 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                />
+                <button
+                  onClick={() => void createProject()}
+                  className="w-full py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  Создать
+                </button>
+              </div>
+            )}
+            {selectedProject && (
+              <button
+                onClick={() => void addFileToProject()}
+                className="w-full py-2 bg-indigo-50 text-indigo-600 text-xs font-semibold rounded-lg hover:bg-indigo-100 transition-colors border border-indigo-100"
+              >
+                Добавить выбранный рейс
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
+          {files.filter(f => !selectedProject || selectedProject.file_ids.includes(f.id)).map(file => (
+            <button
+              key={file.id}
+              onClick={() => setSelectedFile(file)}
+              className={`w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all duration-200 group ${selectedFile?.id === file.id ? "bg-indigo-50 text-indigo-700 shadow-sm ring-1 ring-indigo-100" : "hover:bg-slate-50 text-slate-600"}`}
+            >
+              <span className={`h-2 w-2 rounded-full shrink-0 ${file.status === 'ready' ? 'bg-emerald-500' : file.status === 'parsing' ? 'bg-amber-500' : 'bg-slate-300'}`} />
+              <div className="min-w-0 flex flex-col">
+                <span className="text-xs font-semibold truncate">{file.name}</span>
+                <span className="text-[10px] opacity-70 truncate">{file.format.toUpperCase()} · {file.events_count} событий</span>
+              </div>
+            </button>
+          ))}
+          {files.length === 0 && <div className="p-4 text-center text-xs text-slate-400 italic">Загрузите поток, и мы покажем, чем жил этот рейс.</div>}
+        </div>
+
+        <div className="p-6 space-y-4">
+          <label className="flex items-center justify-center gap-2 w-full p-3 border-2 border-dashed border-slate-200 rounded-xl text-xs font-bold text-slate-500 hover:border-indigo-300 hover:text-indigo-600 hover:bg-indigo-50/30 cursor-pointer transition-all">
+            <FileUp size={16} />
+            Добавить рейс
+            <input type="file" className="hidden" accept=".jsonseq,.json,.csv" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) void upload(file); }} />
+          </label>
+
+          <div className="pt-4 border-t border-slate-100">
+            {user ? (
+              <div className="flex items-center justify-between gap-3 p-2 bg-slate-50 rounded-xl">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-800 truncate">{user.name}</div>
+                  <div className="text-[10px] text-slate-500 truncate">{user.email}</div>
+                </div>
+                <button onClick={logout} className="p-2 text-slate-400 hover:text-rose-500 transition-colors rounded-lg hover:bg-rose-50">
+                  <LogOut size={16} />
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <button
+                  onClick={() => setAuthOpen(!authOpen)}
+                  className="w-full flex items-center justify-center gap-2 p-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:border-indigo-200 hover:text-indigo-600 transition-all"
+                >
+                  <LogIn size={14} /> Войти
+                </button>
+                {authOpen && (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex p-1 bg-slate-200/50 rounded-lg">
+                      <button
+                        onClick={() => setAuthMode("login")}
+                        className={`flex-1 py-1 text-[10px] font-bold rounded-md transition-all ${authMode === "login" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500"}`}
+                      >
+                        Вход
+                      </button>
+                      <button
+                        onClick={() => setAuthMode("register")}
+                        className={`flex-1 py-1 text-[10px] font-bold rounded-md transition-all ${authMode === "register" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500"}`}
+                      >
+                        Регистрация
+                      </button>
+                    </div>
+                    {authMode === "register" && <input placeholder="Имя" className="w-full p-2 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500" value={authName} onChange={(e) => setAuthName(e.target.value)} />}
+                    <input placeholder="Email" type="email" className="w-full p-2 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} />
+                    <input placeholder="Пароль" type="password" className="w-full p-2 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} />
+                    <button
+                      onClick={() => void submitAuth()}
+                      className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors"
+                    >
+                      {authMode === "login" ? "Войти" : "Создать аккаунт"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-center gap-2 py-3 text-[10px] font-medium text-slate-400">
+            <Radio size={12} /> локальный режим · API
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between shrink-0">
+          <div className="flex flex-col">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{selectedProject ? "Общая папка / обзор проекта" : "Обзор рейса"}</p>
+            <h1 className="text-xl font-bold text-slate-800 leading-tight">{overviewName}</h1>
+          </div>
+          <button
+            onClick={() => void loadFiles()}
+            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-transparent hover:border-indigo-100"
+            title="Обновить данные"
+          >
+            <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-8 space-y-6">
+          {error && (
+            <div className="flex items-center gap-3 p-4 bg-rose-50 border border-rose-100 text-rose-600 rounded-xl text-xs font-medium animate-in fade-in slide-in-from-top-2">
+              <AlertTriangle size={18} className="shrink-0" />
+              <span>{error}. Запустите `uvicorn backend.app.main:app --reload`.</span>
+            </div>
+          )}
+
+          {/* Metrics */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <MetricCard label="Сигналы" value={overviewReadings} />
+            <MetricCard label="Все моменты" value={overviewEvents} />
+            <MetricCard label="Предупреждения" value={severityCounts.warning} variant="warning" />
+            <MetricCard label="Критичные" value={severityCounts.critical} variant="critical" />
+            <MetricCard label="Файлов" value={projectStats?.files_count ?? (selectedFile ? 1 : 0)} />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Event Panel */}
+            <section className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+              <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">События за {selectedDay ? formatDay(selectedDay) : "все дни"}</p>
+                  <h2 className="text-lg font-bold text-slate-800">Что происходило в пути</h2>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    className="text-xs p-2 rounded-lg border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={selectedDay}
+                    onChange={(e) => setSelectedDay(e.target.value)}
+                  >
+                    <option value="">Все дни</option>
+                    {availableDays.map(day => <option value={day} key={day}>{formatDay(day)}</option>)}
+                  </select>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      placeholder="Найти момент"
+                      className="pl-8 pr-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500 w-40"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                    />
+                  </div>
+                  <select
+                    className="text-xs p-2 rounded-lg border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={severity}
+                    onChange={(e) => setSeverity(e.target.value)}
+                  >
+                    <option value="all">Все уровни</option>
+                    <option value="critical">Критично</option>
+                    <option value="warning">Предупреждения</option>
+                    <option value="info">Информация</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto max-h-[500px]">
+                {visibleEvents.map((event, index) => (
+                  <EventRow
+                    key={`${event.type}-${index}`}
+                    event={event}
+                    isSelected={selectedEvent === event}
+                    onClick={() => setSelectedEvent(event)}
+                  />
+                ))}
+                {visibleEvents.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-20 text-center space-y-2 text-slate-400">
+                    <Activity size={32} className="opacity-20" />
+                    <strong className="text-sm font-semibold text-slate-500">Событий пока нет</strong>
+                    <span className="text-xs max-w-xs mx-auto">Выберите обработанный файл или измените фильтр.</span>
+                  </div>
+                )}
+                {visibleEvents.length < filteredEvents.length && (
+                  <button
+                    onClick={() => setEventLimit((l) => l + EVENT_PAGE_SIZE)}
+                    className="w-full p-4 text-xs font-bold text-indigo-600 bg-indigo-50/50 hover:bg-indigo-50 transition-colors border-t border-slate-100"
+                  >
+                    Показать ещё ({filteredEvents.length - visibleEvents.length})
+                  </button>
+                )}
+              </div>
+            </section>
+
+            {/* Detail Panel */}
+            <section className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">РАЗБОР МОМЕНТА</p>
+                  <h2 className="text-lg font-bold text-slate-800">Почему это важно</h2>
+                </div>
+                <span className="text-xs font-medium text-slate-400">{selectedEvent ? formatTime(selectedEvent.ts_start) : "—"}</span>
+              </div>
+              {selectedEvent ? (
+                <div className="p-6 space-y-6 overflow-y-auto">
+                  <div className="space-y-3">
+                    <span className={`inline-block px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider text-white ${
+                      selectedEvent.severity === 'critical' ? 'bg-rose-500' :
+                      selectedEvent.severity === 'warning' ? 'bg-amber-500' : 'bg-indigo-500'
+                    }`}>
+                      {severityLabel(selectedEvent.severity)}
+                    </span>
+                    <h3 className="text-xl font-bold text-slate-800 leading-tight">{eventLabel(selectedEvent.type)}</h3>
+                    <p className="text-sm text-slate-600 leading-relaxed">{selectedEvent.explanation}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Параметры события</p>
+                    <dl className="divide-y divide-slate-100 border rounded-xl border-slate-100 overflow-hidden">
+                      {Object.entries(selectedEvent.payload_json).map(([key, value]) => (
+                        <div key={key} className="flex justify-between p-3 text-xs hover:bg-slate-50 transition-colors">
+                          <dt className="text-slate-500 font-medium">{key}</dt>
+                          <dd className="text-slate-800 font-mono text-right break-all ml-4">{String(value)}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+
+                  {(selectedEvent.file_id ?? selectedFile?.id) && (
+                    <MapReplay fileId={selectedEvent.file_id ?? selectedFile?.id ?? ""} event={selectedEvent} />
+                  )}
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center py-20 text-center space-y-3 text-slate-400 p-8">
+                  <div className="p-4 bg-slate-50 rounded-full text-slate-300">
+                    <AlertTriangle size={32} />
+                  </div>
+                  <div>
+                    <strong className="block text-sm font-semibold text-slate-500">Выберите момент</strong>
+                    <span className="text-xs block max-w-xs mx-auto opacity-70">Здесь появится его история, причина и движение вокруг него.</span>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* Timeline Panel */}
+          <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">СЛЕД ДНЯ</p>
+                <h2 className="text-lg font-bold text-slate-800">Линия рейса</h2>
+              </div>
+              <span className="text-xs font-medium text-slate-400">{events[0] ? new Date(events[0].ts_start).toLocaleDateString("ru-RU") : "нет данных"}</span>
+            </div>
+            <div className="p-8">
+              <div className="relative h-12 flex items-center">
+                <div className="absolute h-0.5 w-full bg-slate-200 rounded-full" />
+                {visibleEvents.map((event, index) => (
+                  <button
+                    key={`marker-${index}`}
+                    onClick={() => setSelectedEvent(event)}
+                    className={`absolute h-4 w-4 -translate-y-1/2 rounded-full border-2 border-white shadow-sm transition-all duration-200 hover:scale-150 ${
+                      event.severity === 'critical' ? 'bg-rose-500' :
+                      event.severity === 'warning' ? 'bg-amber-500' : 'bg-indigo-500'
+                    } ${selectedEvent === event ? 'ring-2 ring-indigo-300 ring-offset-2 scale-125' : ''}`}
+                    style={{ left: `${Math.min(98, 1 + (index / Math.max(1, visibleEvents.length - 1)) * 97)}%` }}
+                    title={eventLabel(event.type)}
+                  />
+                ))}
+              </div>
+              <div className="flex justify-between px-1 mt-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                <span>00:00</span>
+                <span>06:00</span>
+                <span>12:00</span>
+                <span>18:00</span>
+                <span>24:00</span>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  );
+}
 
 const rootElement = document.getElementById("root");
 if (rootElement && rootElement.dataset.reactMounted !== "true") {
   rootElement.dataset.reactMounted = "true";
   createRoot(rootElement).render(<App />);
-}
-
-function formatDay(day: string): string {
-  return new Date(`${day}T12:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }
