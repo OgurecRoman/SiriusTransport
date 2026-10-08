@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from detectors.adas import AdasDetector
 from detectors.brakes import BrakeDetector
 from detectors.localization import LocalizationDetector
+from detectors.services import ServiceDetector
 from detectors.state import FsmDetector, RouteDetector, TelemetryGapDetector, WarningDetector
 
 
@@ -49,7 +50,10 @@ class DetectorTests(unittest.TestCase):
     def test_localization_loss_and_restore(self):
         detector = LocalizationDetector()
         detector.feed({"timestamp": TS, "is_loc_converged": True})
-        self.assertEqual(detector.feed({"timestamp": TS, "is_loc_converged": False})[0].type, "localization.lost")
+        lost = detector.feed({"timestamp": TS, "is_loc_converged": False})[0]
+        self.assertEqual(lost.type, "localization.lost")
+        self.assertEqual(lost.severity, "info")
+        self.assertEqual(lost.explanation, "Сбой позиционирования (GPS/локализация): is_loc_converged перешёл в false. Положение вагона на карте может быть неточным")
         self.assertEqual(detector.feed({"timestamp": TS, "is_loc_converged": True})[0].type, "localization.restored")
 
     def test_warning_fsm_and_route_transitions(self):
@@ -71,6 +75,15 @@ class DetectorTests(unittest.TestCase):
         detector.feed({"timestamp": TS.replace(second=2)})
         event = detector.feed({"timestamp": TS.replace(second=7)})[0]
         self.assertEqual(event.type, "telemetry.gap")
+        self.assertEqual(event.severity, "info")
+
+    def test_service_gps_down_is_info_and_other_service_down_is_warning(self):
+        detector = ServiceDetector()
+        detector.feed({"timestamp": TS, "ubloxGps": True, "roadModel": True})
+        events = detector.feed({"timestamp": TS, "ubloxGps": False, "roadModel": False})
+        severities = {event.type: event.severity for event in events}
+        self.assertEqual(severities["service.ubloxGps.down"], "info")
+        self.assertEqual(severities["service.roadModel.down"], "warning")
 
 
 if __name__ == "__main__":

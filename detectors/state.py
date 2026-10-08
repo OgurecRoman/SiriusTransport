@@ -109,7 +109,7 @@ class TelemetryGapDetector:
             return [
                 Event(
                     "telemetry.gap",
-                    "warning",
+                    "info",
                     self._previous,
                     timestamp,
                     {"interval_seconds": interval, "nominal_seconds": self._nominal_seconds},
