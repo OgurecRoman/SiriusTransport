@@ -19,7 +19,7 @@ class WarningDetector:
         if current > 0 and (self._previous is None or self._previous <= 0):
             event = Event(
                 "warning.level.raised",
-                "warning",
+                "info",
                 timestamp,
                 timestamp,
                 {"m_warn_level": current, **telemetry_context(reading)},
@@ -109,7 +109,7 @@ class TelemetryGapDetector:
             return [
                 Event(
                     "telemetry.gap",
-                    "warning",
+                    "info",
                     self._previous,
                     timestamp,
                     {"interval_seconds": interval, "nominal_seconds": self._nominal_seconds},

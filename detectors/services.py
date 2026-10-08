@@ -24,7 +24,8 @@ class ServiceDetector:
             previous = self._previous.get(service)
             if previous is not None and previous != current:
                 state = "поднят" if current else "отвалился"
-                events.append(Event(f"service.{service}.{'up' if current else 'down'}", "info" if current else "warning", timestamp, timestamp, {service: current}, f"Сервис {service} {state}: значение изменилось с {previous} на {current}."))
+                event_severity = "info"
+                events.append(Event(f"service.{service}.{'up' if current else 'down'}", event_severity, timestamp, timestamp, {service: current}, f"Сервис {service} {state}: значение изменилось с {previous} на {current}."))
             self._previous[service] = current
         return events
 

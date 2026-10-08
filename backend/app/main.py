@@ -218,6 +218,18 @@ def get_file(file_id: UUID) -> FileSummary:
         return _summary(db, _file_or_404(db, file_id))
 
 
+@app.post("/api/files/{file_id}/reparse", response_model=FileSummary, status_code=202)
+def reparse_file(file_id: UUID, background_tasks: BackgroundTasks) -> FileSummary:
+    with SessionLocal() as db:
+        model = _file_or_404(db, file_id)
+        path = Path(model.path)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="stored source file not found")
+        summary = _summary(db, model)
+    background_tasks.add_task(parse_uploaded_file, file_id, path)
+    return summary
+
+
 @app.get("/api/files/{file_id}/sessions")
 def get_sessions(file_id: UUID) -> list[dict]:
     with SessionLocal() as db:

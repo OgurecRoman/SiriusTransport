@@ -17,7 +17,7 @@ class LocalizationDetector:
             return []
         event = None
         if self._previous is True and current is False:
-            event = Event("localization.lost", "warning", timestamp, timestamp, {"is_loc_converged": False, **telemetry_context(reading)}, "Локализация потеряна: is_loc_converged перешёл в false.")
+            event = Event("localization.lost", "info", timestamp, timestamp, {"is_loc_converged": False, **telemetry_context(reading)}, "Сбой позиционирования (GPS/локализация): is_loc_converged перешёл в false. Положение вагона на карте может быть неточным")
         elif self._previous is False and current is True:
             event = Event("localization.restored", "info", timestamp, timestamp, {"is_loc_converged": True, **telemetry_context(reading)}, "Локализация восстановлена: is_loc_converged перешёл в true.")
         self._previous = current
