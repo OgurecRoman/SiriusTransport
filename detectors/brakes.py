@@ -10,8 +10,8 @@ class BrakeDetector:
     _BRAKES = {
         "is_emergency_brake_fb": ("brake.emergency.activated", "critical", "экстренное"),
         "is_crash_brake_fb": ("brake.crash.activated", "critical", "аварийное"),
-        "is_mechanical_brake_fb": ("brake.mechanical.activated", "warning", "механическое"),
-        "is_rail_brake_fb": ("brake.rail.activated", "warning", "рельсовое"),
+        "is_mechanical_brake_fb": ("brake.mechanical.activated", "info", "механическое"),
+        "is_rail_brake_fb": ("brake.rail.activated", "info", "рельсовое"),
     }
 
     def __init__(self) -> None:

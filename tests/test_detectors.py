@@ -35,11 +35,11 @@ class DetectorTests(unittest.TestCase):
         self.assertTrue(event.payload_json["routine_braking"])
         self.assertEqual(event.payload_json["latitude"], 59.9)
 
-    def test_mechanical_braking_in_motion_is_warning(self):
+    def test_mechanical_braking_in_motion_is_info(self):
         detector = BrakeDetector()
         detector.feed({"timestamp": TS, "is_mechanical_brake_fb": False})
         event = detector.feed({"timestamp": TS, "is_mechanical_brake_fb": True, "speed": 18, "fsm_state": "Moving"})[0]
-        self.assertEqual(event.severity, "warning")
+        self.assertEqual(event.severity, "info")
 
     def test_adas_explanation_does_not_invent_object_details(self):
         detector = AdasDetector()
@@ -83,7 +83,7 @@ class DetectorTests(unittest.TestCase):
         events = detector.feed({"timestamp": TS, "ubloxGps": False, "roadModel": False})
         severities = {event.type: event.severity for event in events}
         self.assertEqual(severities["service.ubloxGps.down"], "info")
-        self.assertEqual(severities["service.roadModel.down"], "warning")
+        self.assertEqual(severities["service.roadModel.down"], "info")
 
 
 if __name__ == "__main__":

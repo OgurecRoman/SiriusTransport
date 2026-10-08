@@ -8,7 +8,6 @@ from .base import Event
 
 class ServiceDetector:
     _SERVICES = ("ubloxGps", "tramSlaveVisor", "minsEth", "tramPlannerService", "leftImage", "t25Front", "dbwFbTram", "odoFbTram", "roadModel")
-    _GPS_SERVICES = {"ubloxGps"}
 
     def __init__(self) -> None:
         self._previous: dict[str, bool] = {}
@@ -25,7 +24,7 @@ class ServiceDetector:
             previous = self._previous.get(service)
             if previous is not None and previous != current:
                 state = "поднят" if current else "отвалился"
-                event_severity = "info" if current or service in self._GPS_SERVICES else "warning"
+                event_severity = "info"
                 events.append(Event(f"service.{service}.{'up' if current else 'down'}", event_severity, timestamp, timestamp, {service: current}, f"Сервис {service} {state}: значение изменилось с {previous} на {current}."))
             self._previous[service] = current
         return events

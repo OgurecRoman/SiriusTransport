@@ -157,6 +157,7 @@ function App() {
   const [severityCounts, setSeverityCounts] = useState<SeverityCounts>({ info: 0, warning: 0, critical: 0 });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectSummary | null>(null);
+  const [viewMode, setViewMode] = useState<"project" | "file">("project");
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
   const [projectFormOpen, setProjectFormOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -219,10 +220,11 @@ function App() {
     if (!selectedFile && !selectedProject) return;
     const loadEvents = async () => {
       const query = selectedDay ? `?day=${encodeURIComponent(selectedDay)}` : "";
-      const eventsUrl = selectedProject
+      const isProjectView = viewMode === "project" && selectedProject;
+      const eventsUrl = isProjectView
         ? `${API}/projects/${selectedProject.id}/events${query}`
         : `${API}/files/${selectedFile?.id}/events${query}`;
-      const countsUrl = selectedProject
+      const countsUrl = isProjectView
         ? `${API}/projects/${selectedProject.id}/stats${query}`
         : `${API}/files/${selectedFile?.id}/severity-counts${query}`;
       try {
@@ -245,7 +247,7 @@ function App() {
       }
     };
     void loadEvents();
-  }, [selectedFile, selectedProject, selectedDay]);
+  }, [selectedFile, selectedProject, selectedDay, viewMode]);
 
   const filteredEvents = useMemo(() => events.filter((event) => {
     const matchesSeverity = severity === "all" || event.severity === severity;
@@ -321,19 +323,20 @@ function App() {
   };
 
   const logout = () => { localStorage.removeItem("tram_token"); setUser(null); };
-  const availableDays = selectedProject ? (projectStats?.days ?? []) : (selectedFile?.days ?? []);
-  const overviewName = selectedProject?.name ?? selectedFile?.name ?? "Выберите рейс";
-  const overviewReadings = projectStats?.readings_count ?? selectedFile?.readings_count ?? "—";
-  const overviewEvents = projectStats?.events_count ?? selectedFile?.events_count ?? "—";
+  const isProjectView = viewMode === "project" && selectedProject !== null;
+  const availableDays = isProjectView ? (projectStats?.days ?? []) : (selectedFile?.days ?? []);
+  const overviewName = isProjectView ? selectedProject.name : selectedFile?.name ?? "Выберите рейс";
+  const overviewReadings = isProjectView ? projectStats?.readings_count ?? "—" : selectedFile?.readings_count ?? "—";
+  const overviewEvents = isProjectView ? projectStats?.events_count ?? "—" : selectedFile?.events_count ?? "—";
 
   return (
     <main className="shell">
       <aside className="sidebar">
         <div className="brand"><span>Трам WAY</span></div>
         <div className="side-heading"><span>Сохраненные рейсы</span><span className="count">{files.length}</span></div>
-        <div className="project-switcher"><label>Проект</label><div className="project-row"><select value={selectedProject?.id ?? ""} onChange={(event) => setSelectedProject(projects.find((project) => project.id === event.target.value) ?? null)}><option value="">Все файлы</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select><button title="Создать проект" onClick={() => setProjectFormOpen((value) => !value)}><FolderPlus size={15} /></button></div>{projectFormOpen && <div className="project-form"><input placeholder="Название проекта" value={projectName} onChange={(event) => setProjectName(event.target.value)} /><button onClick={() => void createProject()}>Создать</button></div>}{selectedProject && <button className="attach-button" onClick={() => void addFileToProject()}>Добавить выбранный рейс</button>}</div>
+        <div className="project-switcher"><label>Проект или отдельный рейс</label><div className="project-row"><select value={isProjectView ? selectedProject?.id ?? "" : ""} onChange={(event) => { const project = projects.find((item) => item.id === event.target.value) ?? null; setSelectedProject(project); setViewMode(project ? "project" : "file"); }}><option value="">Отдельный рейс</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select><button title="Создать проект" onClick={() => setProjectFormOpen((value) => !value)}><FolderPlus size={15} /></button></div>{projectFormOpen && <div className="project-form"><input maxLength={40} placeholder="Название проекта (до 40 символов)" value={projectName} onChange={(event) => setProjectName(event.target.value)} /><button onClick={() => void createProject()}>Создать</button></div>}{isProjectView && <button className="attach-button" onClick={() => void addFileToProject()}>Добавить выбранный рейс</button>}</div>
         <div className="file-list">
-          {files.filter((file) => !selectedProject || selectedProject.file_ids.includes(file.id)).map((file) => <button className={`file-item ${selectedFile?.id === file.id ? "active" : ""}`} key={file.id} onClick={() => setSelectedFile(file)}><span className={`status-dot ${file.status}`} /><span className="file-copy"><strong>{file.name}</strong><small>{file.format.toUpperCase()} · {file.events_count} событий</small></span></button>)}
+          {files.filter((file) => !isProjectView || selectedProject.file_ids.includes(file.id)).map((file) => <button className={`file-item ${viewMode === "file" && selectedFile?.id === file.id ? "active" : ""}`} key={file.id} onClick={() => { setSelectedFile(file); setViewMode("file"); }}><span className={`status-dot ${file.status}`} /><span className="file-copy"><strong title={file.name}>{file.name}</strong><small>{file.format.toUpperCase()} · {file.events_count} событий</small></span></button>)}
           {files.length === 0 && <div className="empty-side">Загрузите поток, и мы покажем, чем жил этот рейс.</div>}
         </div>
         <label className="upload-button"><FileUp size={16} /> Добавить рейс<input type="file" accept=".jsonseq,.json,.csv" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /></label>
@@ -342,14 +345,14 @@ function App() {
       </aside>
 
       <section className="workspace">
-        <header className="topbar"><div><p className="eyebrow">{selectedProject ? "Общая папка / обзор проекта" : "Обзор рейса"}</p><h1>{overviewName}</h1></div><button className="icon-button" title="Обновить" onClick={() => void loadFiles()}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></header>
+        <header className="topbar"><div><p className="eyebrow">{isProjectView ? "Общая папка / обзор проекта" : "Обзор рейса"}</p><h1 title={overviewName}>{overviewName}</h1></div><button className="icon-button" title="Обновить" onClick={() => void loadFiles()}><RefreshCw size={17} className={loading ? "spin" : ""} /></button></header>
         {error && <div className="notice"><AlertTriangle size={17} /> {error}. Запустите `uvicorn backend.app.main:app --reload`.</div>}
         <div className="metric-row">
           <div className="metric"><span>Сигналы</span><strong>{overviewReadings}</strong></div>
           <div className="metric"><span>Все моменты</span><strong>{overviewEvents}</strong></div>
           <div className="metric warning-metric"><span>Предупреждения</span><strong>{severityCounts.warning}</strong></div>
           <div className="metric critical-metric"><span>Критичные</span><strong>{severityCounts.critical}</strong></div>
-          <div className="metric"><span>Файлов</span><strong>{projectStats?.files_count ?? (selectedFile ? 1 : 0)}</strong></div>
+          <div className="metric"><span>Файлов</span><strong>{isProjectView ? projectStats?.files_count ?? 0 : selectedFile ? 1 : 0}</strong></div>
         </div>
         <div className="content-grid">
           <section className="panel event-panel"><div className="panel-head"><div><p className="eyebrow">События за {selectedDay ? formatDay(selectedDay) : "все дни"}</p><h2>Что происходило в пути</h2></div><div className="event-tools"><select aria-label="День телеметрии" value={selectedDay} onChange={(event) => setSelectedDay(event.target.value)}><option value="">Все дни</option>{availableDays.map((day) => <option value={day} key={day}>{formatDay(day)}</option>)}</select><div className="search"><Search size={15} /><input placeholder="Найти момент" value={search} onChange={(event) => setSearch(event.target.value)} /></div><select value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="all">Все уровни</option><option value="critical">Критично</option><option value="warning">Предупреждения</option><option value="info">Информация</option></select><label className="info-toggle"><input type="checkbox" checked={showInfo} onChange={(event) => setShowInfo(event.target.checked)} />Показать информационные события</label></div></div>

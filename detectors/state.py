@@ -19,7 +19,7 @@ class WarningDetector:
         if current > 0 and (self._previous is None or self._previous <= 0):
             event = Event(
                 "warning.level.raised",
-                "warning",
+                "info",
                 timestamp,
                 timestamp,
                 {"m_warn_level": current, **telemetry_context(reading)},
